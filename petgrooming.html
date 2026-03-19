@@ -1,0 +1,987 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>PetGrooming Pro</title>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+    const { useState, useEffect } = React;
+
+const formatCurrency = (v) =>
+  new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(v || 0);
+const formatDate = (d) =>
+  d ? new Date(d + "T12:00:00").toLocaleDateString("pt-BR") : "—";
+const addDays = (dateStr, days) => {
+  const d = new Date(dateStr + "T12:00:00");
+  d.setDate(d.getDate() + days);
+  return d.toISOString().split("T")[0];
+};
+const today = () => new Date().toISOString().split("T")[0];
+const currentMonth = () => today().slice(0, 7);
+const daysDiff = (dateStr) => {
+  if (!dateStr) return 999;
+  const d = new Date(dateStr + "T12:00:00");
+  const now = new Date(); now.setHours(12, 0, 0, 0);
+  return Math.round((d - now) / (1000 * 60 * 60 * 24));
+};
+
+const SERVICES = ["Banho", "Tosa", "Banho + Tosa", "Hidratação", "Tosa Higiênica", "Desembolamento"];
+const SIZES = ["Pequeno", "Médio", "Grande", "Gigante"];
+const PAYMENT_METHODS = ["Pix", "Dinheiro", "Débito", "Crédito"];
+const PAYMENT_ICONS = { Pix: "💠", Dinheiro: "💵", Débito: "💳", Crédito: "💳" };
+const EXPENSE_CATEGORIES = ["Produtos", "Equipamentos", "Aluguel", "Funcionário", "Água/Luz", "Outros"];
+const BR_STATES = ["AC","AL","AP","AM","BA","CE","DF","ES","GO","MA","MT","MS","MG","PA","PB","PR","PE","PI","RJ","RN","RS","RO","RR","SC","SP","SE","TO"];
+
+// FIX 1: Frequência de renovação configurável
+const FREQUENCIES = [
+  { label: "Semanal (7 dias)", days: 7 },
+  { label: "Quinzenal (15 dias)", days: 15 },
+  { label: "28 dias (padrão)", days: 28 },
+  { label: "Mensal (30 dias)", days: 30 },
+  { label: "45 dias", days: 45 },
+  { label: "60 dias", days: 60 },
+];
+
+const PRICE_TABLE = {
+  "Banho":          { Pequeno: 40,  Médio: 60,  Grande: 80,  Gigante: 110 },
+  "Tosa":           { Pequeno: 50,  Médio: 70,  Grande: 95,  Gigante: 130 },
+  "Banho + Tosa":   { Pequeno: 80,  Médio: 110, Grande: 150, Gigante: 200 },
+  "Hidratação":     { Pequeno: 35,  Médio: 50,  Grande: 70,  Gigante: 90  },
+  "Tosa Higiênica": { Pequeno: 30,  Médio: 45,  Grande: 60,  Gigante: 80  },
+  "Desembolamento": { Pequeno: 45,  Médio: 65,  Grande: 90,  Gigante: 120 },
+};
+
+const BLANK_PET = {
+  name:"", owner:"", phone:"", breed:"", size:"Pequeno", notes:"",
+  cep:"", street:"", number:"", complement:"", neighborhood:"", city:"", state:""
+};
+const BLANK_APPT = {
+  petId:"", isAvulso:false, avulsoName:"", avulsoOwner:"", avulsoPhone:"",
+  avulsoSize:"Pequeno", service:"Banho", date:today(), price:"", manualPrice:false,
+  paid:false, paymentMethod:"Pix", notes:"", frequencyDays:28
+};
+const BLANK_EXP = { description:"", category:"Produtos", amount:"", date:today(), notes:"" };
+
+function App() {
+  const [tab, setTab] = useState("dashboard");
+  const load = (key, def) => { try { return JSON.parse(localStorage.getItem(key) || def); } catch { return JSON.parse(def); } };
+  const [pets, setPets] = useState(() => load("pg_pets", "[]"));
+  const [appointments, setAppointments] = useState(() => load("pg_appts", "[]"));
+  const [expenses, setExpenses] = useState(() => load("pg_exps", "[]"));
+  const [modal, setModal] = useState(null);
+  const [editPet, setEditPet] = useState(null);
+  const [editAppt, setEditAppt] = useState(null);
+  const [editExp, setEditExp] = useState(null);
+  const [pf, setPf] = useState(BLANK_PET);
+  const [af, setAf] = useState(BLANK_APPT);
+  const [ef, setEf] = useState(BLANK_EXP);
+  const [filterMonth, setFilterMonth] = useState(currentMonth());
+  const [finTab, setFinTab] = useState("receitas");
+  const [confirmDlg, setConfirmDlg] = useState(null);
+
+  const askConfirm = (msg, onOk) => setConfirmDlg({ msg, onOk });
+
+  useEffect(() => { localStorage.setItem("pg_pets", JSON.stringify(pets)); }, [pets]);
+  useEffect(() => { localStorage.setItem("pg_appts", JSON.stringify(appointments)); }, [appointments]);
+  useEffect(() => { localStorage.setItem("pg_exps", JSON.stringify(expenses)); }, [expenses]);
+
+  // FIX 2: Auto-price correctly based on pet size (cadastrado or avulso)
+  useEffect(() => {
+    if (af.manualPrice) return;
+    const size = af.isAvulso ? af.avulsoSize : pets.find(p => p.id === af.petId)?.size;
+    if (size && af.service) {
+      const price = PRICE_TABLE[af.service]?.[size] || "";
+      setAf(f => ({ ...f, price: price.toString() }));
+    } else if (!size) {
+      setAf(f => ({ ...f, price: "" }));
+    }
+  }, [af.petId, af.service, af.isAvulso, af.avulsoSize, af.manualPrice]);
+
+  const getPet = (id) => pets.find(p => p.id === id);
+  const getLabel = (a) => a.isAvulso ? `${a.avulsoName || "—"} (Avulso)` : getPet(a.petId)?.name || "—";
+  const getOwner = (a) => a.isAvulso ? (a.avulsoOwner || "—") : getPet(a.petId)?.owner || "—";
+  const getPhone = (a) => a.isAvulso ? (a.avulsoPhone || "") : getPet(a.petId)?.phone || "";
+  const getSize  = (a) => a.isAvulso ? (a.avulsoSize || "—") : getPet(a.petId)?.size || "—";
+
+  const closeModal = () => {
+    setModal(null); setEditPet(null); setEditAppt(null); setEditExp(null);
+    setPf(BLANK_PET); setAf(BLANK_APPT); setEf(BLANK_EXP);
+  };
+
+  const savePet = () => {
+    if (!pf.name || !pf.owner) return;
+    editPet
+      ? setPets(ps => ps.map(p => p.id === editPet ? { ...p, ...pf } : p))
+      : setPets(ps => [...ps, { ...pf, id: Date.now().toString() }]);
+    closeModal();
+  };
+
+  // FIX 3: nextDate now uses configurable frequencyDays
+  const saveAppt = () => {
+    if (af.isAvulso ? !af.avulsoName : !af.petId) return;
+    if (!af.date) return;
+    const freq = parseInt(af.frequencyDays) || 28;
+    const data = { ...af, nextDate: addDays(af.date, freq), price: parseFloat(af.price) || 0, frequencyDays: freq };
+    editAppt
+      ? setAppointments(as => as.map(a => a.id === editAppt ? { ...a, ...data } : a))
+      : setAppointments(as => [...as, { ...data, id: Date.now().toString() }]);
+    closeModal();
+  };
+
+  const saveExp = () => {
+    if (!ef.description || !ef.amount) return;
+    const data = { ...ef, amount: parseFloat(ef.amount) || 0 };
+    editExp
+      ? setExpenses(es => es.map(e => e.id === editExp ? { ...e, ...data } : e))
+      : setExpenses(es => [...es, { ...data, id: Date.now().toString() }]);
+    closeModal();
+  };
+
+  const deletePet  = (id) => { setPets(ps => ps.filter(p => p.id !== id)); setAppointments(as => as.filter(a => a.petId !== id)); };
+  const deleteAppt = (id) => setAppointments(as => as.filter(a => a.id !== id));
+  const deleteExp  = (id) => setExpenses(es => es.filter(e => e.id !== id));
+  const togglePaid = (id) => setAppointments(as => as.map(a => a.id === id ? { ...a, paid: !a.paid } : a));
+
+  const openEditPet  = (pet) => { setEditPet(pet.id); setPf({ ...BLANK_PET, ...pet }); setModal("pet"); };
+  const openEditAppt = (a)   => { setEditAppt(a.id); setAf({ ...BLANK_APPT, ...a, price: a.price?.toString() || "", manualPrice: true }); setModal("appt"); };
+  const openEditExp  = (e)   => { setEditExp(e.id);  setEf({ ...BLANK_EXP, ...e, amount: e.amount?.toString() || "" }); setModal("expense"); };
+
+  // FIX 4: alert threshold uses each appointment's own frequencyDays to scale
+  const renewals = appointments.filter(a => { const d = daysDiff(a.nextDate); return d >= 0 && d <= 7; });
+  const overdue  = appointments.filter(a => daysDiff(a.nextDate) < 0);
+
+  // Finance — always scoped to filterMonth
+  const mAppts    = appointments.filter(a => a.date?.startsWith(filterMonth));
+  const mExps     = expenses.filter(e => e.date?.startsWith(filterMonth));
+  const mRevenue  = mAppts.reduce((s, a) => s + (parseFloat(a.price) || 0), 0);
+  const mReceived = mAppts.filter(a => a.paid).reduce((s, a) => s + (parseFloat(a.price) || 0), 0);
+  const mPending  = mRevenue - mReceived;
+  const mExpTotal = mExps.reduce((s, e) => s + (parseFloat(e.amount) || 0), 0);
+  const mProfit   = mReceived - mExpTotal;
+
+  const allRevenue  = appointments.reduce((s, a) => s + (parseFloat(a.price) || 0), 0);
+  const allReceived = appointments.filter(a => a.paid).reduce((s, a) => s + (parseFloat(a.price) || 0), 0);
+  const allExpenses = expenses.reduce((s, e) => s + (parseFloat(e.amount) || 0), 0);
+
+  // FIX 5: Dashboard financial strip uses current month (not filterMonth which user may change)
+  const nowMonth    = currentMonth();
+  const nowAppts    = appointments.filter(a => a.date?.startsWith(nowMonth));
+  const nowExps     = expenses.filter(e => e.date?.startsWith(nowMonth));
+  const nowRevenue  = nowAppts.reduce((s, a) => s + (parseFloat(a.price) || 0), 0);
+  const nowReceived = nowAppts.filter(a => a.paid).reduce((s, a) => s + (parseFloat(a.price) || 0), 0);
+  const nowPending  = nowRevenue - nowReceived;
+  const nowExpTotal = nowExps.reduce((s, e) => s + (parseFloat(e.amount) || 0), 0);
+  const nowProfit   = nowReceived - nowExpTotal;
+
+  const pmBreak  = PAYMENT_METHODS.reduce((acc, m) => { acc[m] = mAppts.filter(a => a.paid && a.paymentMethod === m).reduce((s, a) => s + (parseFloat(a.price) || 0), 0); return acc; }, {});
+  const svcCount = SERVICES.reduce((acc, s) => { acc[s] = appointments.filter(a => a.service === s).length; return acc; }, {});
+
+  // FIX 6: Reagendar from alerts correctly carries all avulso fields
+  const reagendarAppt = (a) => {
+    setAf({
+      ...BLANK_APPT,
+      petId: a.petId || "",
+      isAvulso: !!a.isAvulso,
+      avulsoName: a.avulsoName || "",
+      avulsoOwner: a.avulsoOwner || "",
+      avulsoPhone: a.avulsoPhone || "",
+      avulsoSize: a.avulsoSize || "Pequeno",
+      service: a.service,
+      date: today(),
+      frequencyDays: a.frequencyDays || 28,
+    });
+    setModal("appt");
+  };
+
+  const tabs = [
+    { id: "dashboard",    label: "Dashboard",     icon: "📊" },
+    { id: "pets",         label: "Pets",           icon: "🐾" },
+    { id: "appointments", label: "Agendamentos",   icon: "📅" },
+    { id: "finance",      label: "Financeiro",     icon: "💰" },
+    { id: "alerts",       label: `Alertas${renewals.length + overdue.length > 0 ? ` (${renewals.length + overdue.length})` : ""}`, icon: "🔔" },
+  ];
+
+  const css = `
+    @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700;900&family=Lato:wght@300;400;700&display=swap');
+    *{box-sizing:border-box;margin:0;padding:0;}
+    .fd{font-family:'Playfair Display',serif;}
+    .fb{font-family:'Lato',sans-serif;}
+    input,select,textarea{font-family:'Lato',sans-serif;background:#fffaf5;border:1.5px solid #d4a97a;border-radius:8px;padding:9px 13px;font-size:14px;color:#2c1810;width:100%;outline:none;transition:border-color .2s;}
+    input:focus,select:focus,textarea:focus{border-color:#a0522d;}
+    label{font-family:'Lato',sans-serif;font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#8b4513;display:block;margin-bottom:4px;}
+    .btn{font-family:'Lato',sans-serif;font-weight:700;font-size:12px;letter-spacing:.06em;text-transform:uppercase;border:none;border-radius:8px;padding:9px 18px;cursor:pointer;transition:all .18s;}
+    .bp1{background:#8b4513;color:#fff;}.bp1:hover{background:#6b3410;transform:translateY(-1px);}
+    .bg1{background:transparent;color:#8b4513;border:1.5px solid #d4a97a;}.bg1:hover{background:#f5e6d3;}
+    .bsm{font-size:11px;padding:6px 12px;}
+    .bd{background:#c0392b;color:#fff;font-size:11px;padding:6px 11px;}.bd:hover{background:#a93226;}
+    .card{background:#fff;border:1px solid #e8d5bc;border-radius:16px;padding:22px;box-shadow:0 2px 12px rgba(139,69,19,.06);}
+    .badge{font-family:'Lato',sans-serif;font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;padding:3px 9px;border-radius:100px;display:inline-block;}
+    .sgr{background:#d4edda;color:#155724;}.srd{background:#f8d7da;color:#721c24;}
+    .sor{background:#fff3cd;color:#856404;}.sbl{background:#d1ecf1;color:#0c5460;}
+    .spu{background:#e8d5f0;color:#5b1a7a;}.stl{background:#d0f0ea;color:#00695c;}
+    .modal-bg{position:fixed;inset:0;background:rgba(44,24,16,.5);display:flex;align-items:center;justify-content:center;z-index:1000;padding:10px;overflow-y:auto;}
+    .modal{background:#fffaf5;border-radius:20px;padding:26px;max-width:520px;width:100%;border:1px solid #d4a97a;max-height:92vh;overflow-y:auto;}
+    .tnav{display:flex;gap:3px;background:#efe0cc;border-radius:12px;padding:4px;overflow-x:auto;}
+    .tbtn{font-family:'Lato',sans-serif;font-size:12px;font-weight:700;letter-spacing:.04em;border:none;border-radius:9px;padding:8px 14px;cursor:pointer;transition:all .18s;white-space:nowrap;color:#8b4513;background:transparent;}
+    .tbtn.act{background:#fff;color:#2c1810;box-shadow:0 1px 6px rgba(139,69,19,.12);}
+    .g2{display:grid;grid-template-columns:1fr 1fr;gap:13px;}
+    .g3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:13px;}
+    @media(max-width:520px){.g2,.g3{grid-template-columns:1fr;}}
+    .sc{border-radius:14px;padding:20px;color:#fff;box-shadow:0 4px 16px rgba(0,0,0,.15);}
+    .sc1{background:linear-gradient(135deg,#8b4513,#a0522d);}
+    .sc2{background:linear-gradient(135deg,#c8955a,#d4a97a);}
+    .sc3{background:linear-gradient(135deg,#2e7d32,#43a047);}
+    .sc4{background:linear-gradient(135deg,#e65100,#f57c00);}
+    .sc5{background:linear-gradient(135deg,#c0392b,#e74c3c);}
+    .sc6{background:linear-gradient(135deg,#00695c,#00897b);}
+    .sc7{background:linear-gradient(135deg,#6a1b9a,#8e24aa);}
+    .tw{overflow-x:auto;}
+    table{width:100%;border-collapse:collapse;font-family:'Lato',sans-serif;font-size:13px;}
+    th{padding:10px 13px;text-align:left;font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#8b4513;border-bottom:2px solid #e8d5bc;background:#fffaf5;}
+    td{padding:10px 13px;border-bottom:1px solid #f0e0cc;vertical-align:middle;}
+    tr:hover td{background:#fdf6ee;}
+    .al{border-left:4px solid #e74c3c;}
+    .alo{border-left:4px solid #f39c12;}
+    .ftab{display:flex;gap:0;background:#f0dcc8;border-radius:10px;padding:3px;margin-bottom:18px;flex-wrap:wrap;}
+    .ftbtn{flex:1;min-width:120px;font-family:'Lato',sans-serif;font-size:12px;font-weight:700;letter-spacing:.04em;border:none;border-radius:8px;padding:8px 6px;cursor:pointer;transition:all .15s;color:#8b4513;background:transparent;white-space:nowrap;}
+    .ftbtn.act{background:#8b4513;color:#fff;}
+    .ir{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid #f0e0cc;}
+    .ir:last-child{border-bottom:none;}
+    .tgl{width:42px;height:22px;border-radius:100px;position:relative;cursor:pointer;flex-shrink:0;transition:background .2s;}
+    .tgl-th{position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;background:#fff;transition:transform .2s;box-shadow:0 1px 3px rgba(0,0,0,.2);}
+    .seg{display:flex;background:#efe0cc;border-radius:8px;padding:3px;gap:0;}
+    .seg-btn{flex:1;border:none;border-radius:7px;padding:7px;cursor:pointer;font-family:'Lato',sans-serif;font-weight:700;font-size:12px;transition:all .15s;color:#8b4513;background:transparent;}
+    .seg-btn.act{background:#8b4513;color:#fff;}
+    .qcard{background:#fff;border:2px solid #e8d5bc;border-radius:14px;padding:16px 14px;cursor:pointer;text-align:left;transition:all .18s;display:flex;align-items:center;gap:12;}
+    .qcard:hover{box-shadow:0 4px 16px rgba(0,0,0,.1);transform:translateY(-2px);}
+    .sclink{cursor:pointer;transition:transform .18s,box-shadow .18s;user-select:none;}
+    .sclink:hover{transform:translateY(-3px);box-shadow:0 8px 24px rgba(0,0,0,.22);}
+  `;
+
+  return (
+    <div style={{ fontFamily: "'Georgia',serif", minHeight: "100vh", background: "#fdf6ee", color: "#2c1810" }}>
+      <style>{css}</style>
+
+      {/* ── HEADER ── */}
+      <header style={{ background: "linear-gradient(135deg,#3d1a08,#6b2e0e 50%,#8b4513)", padding: "22px 18px 16px", color: "#fff" }}>
+        <div style={{ maxWidth: 980, margin: "0 auto" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
+            <div style={{ fontSize: 36 }}>🛁</div>
+            <div>
+              <h1 className="fd" style={{ fontSize: 24, fontWeight: 900, letterSpacing: "-0.5px", lineHeight: 1 }}>PetGrooming Pro</h1>
+              <p className="fb" style={{ fontSize: 11, opacity: .75, marginTop: 2, letterSpacing: ".04em" }}>Cadastro · Agendamento · Controle Financeiro</p>
+            </div>
+            <div style={{ marginLeft: "auto", display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
+              {renewals.length > 0 && <span className="badge sor">🔔 {renewals.length} renovação</span>}
+              {overdue.length  > 0 && <span className="badge srd">⚠️ {overdue.length} atrasado{overdue.length > 1 ? "s" : ""}</span>}
+            </div>
+          </div>
+          <div className="tnav">
+            {tabs.map(t => (
+              <button key={t.id} className={`tbtn${tab === t.id ? " act" : ""}`} onClick={() => setTab(t.id)}>
+                {t.icon} {t.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      </header>
+
+      <main style={{ maxWidth: 980, margin: "0 auto", padding: "22px 13px 48px" }}>
+
+        {/* ══════════════════════════════
+            DASHBOARD
+        ══════════════════════════════ */}
+        {tab === "dashboard" && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+
+            {/* Ações rápidas */}
+            <div>
+              <p className="fb" style={{ fontSize: 11, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: "#a0522d", marginBottom: 10 }}>Ações rápidas</p>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(145px,1fr))", gap: 10 }}>
+                {[
+                  { icon: "🐾", label: "Novo Pet",    sub: "Cadastrar pet",       action: () => setModal("pet"),    hc: "#8b4513" },
+                  { icon: "📅", label: "Agendar",     sub: "Novo atendimento",    action: () => setModal("appt"),   hc: "#6b3410" },
+                  { icon: "📉", label: "Despesa",     sub: "Registrar saída",     action: () => setModal("expense"),hc: "#c0392b" },
+                  { icon: "🐕", label: "Pet Avulso",  sub: "Atendimento rápido",  action: () => { setAf({ ...BLANK_APPT, isAvulso: true }); setModal("appt"); }, hc: "#6a1b9a" },
+                ].map((a, i) => (
+                  <button key={i} onClick={a.action} className="qcard"
+                    onMouseEnter={e => e.currentTarget.style.borderColor = a.hc}
+                    onMouseLeave={e => e.currentTarget.style.borderColor = "#e8d5bc"}>
+                    <div style={{ fontSize: 28, lineHeight: 1 }}>{a.icon}</div>
+                    <div>
+                      <div className="fb" style={{ fontWeight: 700, fontSize: 14, color: "#2c1810" }}>{a.label}</div>
+                      <div className="fb" style={{ fontSize: 11, color: "#888", marginTop: 1 }}>{a.sub}</div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Métricas clicáveis */}
+            <div>
+              <p className="fb" style={{ fontSize: 11, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: "#a0522d", marginBottom: 10 }}>Visão geral — clique para acessar</p>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(155px,1fr))", gap: 12 }}>
+                {[
+                  { cls: "sc1", icon: "🐾", val: pets.length,                              label: "Pets cadastrados", hint: "Ver pets →",      nav: "pets" },
+                  { cls: "sc2", icon: "📅", val: appointments.length,                       label: "Atendimentos",     hint: "Ver agenda →",    nav: "appointments" },
+                  { cls: "sc3", icon: "✅", val: formatCurrency(allReceived),               label: "Total recebido",   hint: "Ver financeiro →",nav: "finance", sm: true },
+                  { cls: "sc5", icon: "📉", val: formatCurrency(allExpenses),               label: "Total despesas",   hint: "Ver despesas →",  nav: "finance", sm: true },
+                  { cls: "sc6", icon: "💡", val: formatCurrency(allReceived - allExpenses), label: "Lucro líquido",    hint: "Ver resumo →",    nav: "finance", sm: true },
+                  { cls: "sc4", icon: "🔔", val: renewals.length + overdue.length,          label: "Alertas",          hint: "Ver alertas →",   nav: "alerts" },
+                ].map((c, i) => (
+                  <div key={i} className={`sc ${c.cls} sclink`} onClick={() => setTab(c.nav)}>
+                    <div style={{ fontSize: 24 }}>{c.icon}</div>
+                    <div className="fd" style={{ fontSize: c.sm ? 18 : 30, fontWeight: 900, margin: "4px 0 2px" }}>{c.val}</div>
+                    <div style={{ fontSize: 11, opacity: .85, fontFamily: "Lato,sans-serif" }}>{c.label}</div>
+                    <div style={{ fontSize: 10, opacity: .6, fontFamily: "Lato,sans-serif", marginTop: 4 }}>{c.hint}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Alertas + Serviços + Últimos pets */}
+            <div className="g2">
+              <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+                <div style={{ padding: "14px 18px 12px", display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid #f0e0cc" }}>
+                  <h3 className="fd" style={{ fontSize: 16 }}>🔔 Alertas de renovação</h3>
+                  <button className="btn bg1 bsm" onClick={() => setTab("alerts")}>Ver todos →</button>
+                </div>
+                <div style={{ padding: "10px 14px" }}>
+                  {renewals.length === 0 && overdue.length === 0
+                    ? <div style={{ textAlign: "center", padding: "18px 0" }}>
+                        <div style={{ fontSize: 30 }}>🎉</div>
+                        <p className="fb" style={{ color: "#8b4513", fontSize: 13, marginTop: 6 }}>Tudo em dia!</p>
+                      </div>
+                    : [...overdue, ...renewals].slice(0, 5).map(a => {
+                        const diff = daysDiff(a.nextDate);
+                        return (
+                          <div key={a.id} className="card al" style={{ padding: "9px 13px", marginBottom: 7, cursor: "pointer" }}
+                            onClick={() => setTab("alerts")}>
+                            <div style={{ display: "flex", justifyContent: "space-between" }}>
+                              <strong className="fb" style={{ fontSize: 12 }}>🐾 {getLabel(a)}</strong>
+                              <span className={`badge ${diff < 0 ? "srd" : "sor"}`}>{diff < 0 ? `${Math.abs(diff)}d atraso` : diff === 0 ? "Hoje!" : `em ${diff}d`}</span>
+                            </div>
+                            <div className="fb" style={{ fontSize: 11, color: "#888", marginTop: 2 }}>{a.service} · {formatDate(a.nextDate)}</div>
+                          </div>
+                        );
+                      })}
+                </div>
+              </div>
+
+              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+                  <div style={{ padding: "14px 18px 12px", display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid #f0e0cc" }}>
+                    <h3 className="fd" style={{ fontSize: 16 }}>📊 Serviços</h3>
+                    <button className="btn bg1 bsm" onClick={() => setTab("appointments")}>Ver agenda →</button>
+                  </div>
+                  <div style={{ padding: "10px 16px" }}>
+                    {SERVICES.map(s => (
+                      <div key={s} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 7 }}>
+                        <span className="fb" style={{ fontSize: 11, flex: 1 }}>{s}</span>
+                        <div style={{ flex: 2, background: "#f0e0cc", borderRadius: 100, height: 7, overflow: "hidden" }}>
+                          <div style={{ width: appointments.length ? `${(svcCount[s] / appointments.length) * 100}%` : "0%", background: "linear-gradient(90deg,#8b4513,#d4a97a)", height: "100%", borderRadius: 100 }} />
+                        </div>
+                        <span className="fb" style={{ fontSize: 12, fontWeight: 700, minWidth: 16, textAlign: "right" }}>{svcCount[s]}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+                  <div style={{ padding: "14px 18px 10px", display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid #f0e0cc" }}>
+                    <h3 className="fd" style={{ fontSize: 16 }}>🐾 Últimos pets</h3>
+                    <button className="btn bg1 bsm" onClick={() => setTab("pets")}>Ver todos →</button>
+                  </div>
+                  <div style={{ padding: "8px 14px" }}>
+                    {pets.length === 0
+                      ? <p className="fb" style={{ fontSize: 13, color: "#888", padding: "10px 0" }}>Nenhum pet cadastrado.</p>
+                      : [...pets].slice(-4).reverse().map(pet => (
+                          <div key={pet.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 0", borderBottom: "1px solid #f5ede0", cursor: "pointer", borderRadius: 6 }}
+                            onClick={() => setTab("pets")}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+                              <div style={{ width: 34, height: 34, borderRadius: "50%", background: "linear-gradient(135deg,#d4a97a,#8b4513)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, flexShrink: 0 }}>🐾</div>
+                              <div>
+                                <div className="fb" style={{ fontWeight: 700, fontSize: 13 }}>{pet.name}</div>
+                                <div className="fb" style={{ fontSize: 11, color: "#888" }}>{pet.owner} · {pet.size}</div>
+                              </div>
+                            </div>
+                            <button className="btn bg1 bsm" style={{ fontSize: 10, padding: "4px 10px" }}
+                              onClick={e => { e.stopPropagation(); setAf({ ...BLANK_APPT, petId: pet.id }); setModal("appt"); }}>
+                              + Agendar
+                            </button>
+                          </div>
+                        ))
+                    }
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Financeiro do mês atual */}
+            <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+              <div style={{ padding: "14px 18px 12px", display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid #f0e0cc" }}>
+                <h3 className="fd" style={{ fontSize: 16 }}>💰 Financeiro — mês atual</h3>
+                <button className="btn bg1 bsm" onClick={() => setTab("finance")}>Ver detalhes →</button>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(130px,1fr))" }}>
+                {[
+                  { label: "Faturamento",  val: formatCurrency(nowRevenue),  color: "#2c1810" },
+                  { label: "Recebido",     val: formatCurrency(nowReceived), color: "#2e7d32" },
+                  { label: "Pendente",     val: formatCurrency(nowPending),  color: "#e65100" },
+                  { label: "Despesas",     val: formatCurrency(nowExpTotal), color: "#c0392b" },
+                  { label: "Lucro líquido",val: formatCurrency(nowProfit),   color: nowProfit >= 0 ? "#2e7d32" : "#c0392b", bold: true },
+                ].map((f, i) => (
+                  <div key={i} onClick={() => setTab("finance")} style={{ padding: "16px 18px", borderRight: "1px solid #f0e0cc", cursor: "pointer", transition: "background .15s" }}
+                    onMouseEnter={e => e.currentTarget.style.background = "#fdf6ee"}
+                    onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                    <div className="fb" style={{ fontSize: 11, color: "#888", marginBottom: 4, textTransform: "uppercase", letterSpacing: ".05em" }}>{f.label}</div>
+                    <div className="fd" style={{ fontSize: f.bold ? 20 : 17, fontWeight: 900, color: f.color }}>{f.val}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ══════════════════════════════
+            PETS
+        ══════════════════════════════ */}
+        {tab === "pets" && (
+          <div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+              <h2 className="fd" style={{ fontSize: 21 }}>🐾 Pets Cadastrados</h2>
+              <button className="btn bp1" onClick={() => { setEditPet(null); setPf(BLANK_PET); setModal("pet"); }}>+ Novo Pet</button>
+            </div>
+            {pets.length === 0
+              ? <div className="card" style={{ textAlign: "center", padding: 44 }}><div style={{ fontSize: 44 }}>🐶</div><p className="fd" style={{ fontSize: 17, marginTop: 10 }}>Nenhum pet cadastrado</p></div>
+              : <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(260px,1fr))", gap: 13 }}>
+                  {pets.map(pet => {
+                    const last = [...appointments].filter(a => a.petId === pet.id).sort((a, b) => b.date.localeCompare(a.date))[0];
+                    const diff = last?.nextDate ? daysDiff(last.nextDate) : null;
+                    const addr = [
+                      pet.street && `${pet.street}${pet.number ? ", " + pet.number : ""}`,
+                      pet.neighborhood,
+                      pet.city && pet.state ? `${pet.city}/${pet.state}` : pet.city || pet.state
+                    ].filter(Boolean).join(" · ");
+                    return (
+                      <div key={pet.id} className="card">
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                          <div>
+                            <h3 className="fd" style={{ fontSize: 17 }}>🐾 {pet.name}</h3>
+                            <p className="fb" style={{ fontSize: 11, color: "#8b4513", marginTop: 1 }}>{pet.breed || "Raça não informada"}</p>
+                          </div>
+                          <span className="badge sbl">{pet.size}</span>
+                        </div>
+                        <div className="fb" style={{ marginTop: 9, fontSize: 12, color: "#555", display: "flex", flexDirection: "column", gap: 2 }}>
+                          <div>👤 {pet.owner}</div>
+                          {pet.phone && <div>📞 {pet.phone}</div>}
+                          {pet.cep && <div>📮 CEP: {pet.cep}</div>}
+                          {addr && <div>📍 {addr}</div>}
+                          {pet.complement && <div style={{ paddingLeft: 16, fontSize: 11, color: "#888" }}>{pet.complement}</div>}
+                        </div>
+                        {diff !== null && (
+                          <div style={{ marginTop: 8 }}>
+                            <span className={`badge ${diff < 0 ? "srd" : diff <= 7 ? "sor" : "sgr"}`}>
+                              {diff < 0 ? `⚠️ ${Math.abs(diff)}d atrasado` : diff === 0 ? "🔔 Renovar hoje!" : `📅 Renovar em ${diff}d`}
+                            </span>
+                          </div>
+                        )}
+                        {pet.notes && <p className="fb" style={{ marginTop: 7, fontSize: 11, color: "#888", fontStyle: "italic" }}>"{pet.notes}"</p>}
+                        <div style={{ display: "flex", gap: 7, marginTop: 11 }}>
+                          <button className="btn bg1 bsm" onClick={() => openEditPet(pet)}>✏️ Editar</button>
+                          <button className="btn bg1 bsm" onClick={() => { setAf({ ...BLANK_APPT, petId: pet.id }); setModal("appt"); }}>+ Agendar</button>
+                          <button className="btn bd" onClick={() => askConfirm(`Remover ${pet.name}?`, () => deletePet(pet.id))}>🗑️</button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+            }
+          </div>
+        )}
+
+        {/* ══════════════════════════════
+            AGENDAMENTOS
+        ══════════════════════════════ */}
+        {tab === "appointments" && (
+          <div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+              <h2 className="fd" style={{ fontSize: 21 }}>📅 Agendamentos</h2>
+              <button className="btn bp1" onClick={() => { setEditAppt(null); setAf(BLANK_APPT); setModal("appt"); }}>+ Novo</button>
+            </div>
+            {appointments.length === 0
+              ? <div className="card" style={{ textAlign: "center", padding: 44 }}><div style={{ fontSize: 44 }}>📅</div><p className="fd" style={{ fontSize: 17, marginTop: 10 }}>Nenhum agendamento</p></div>
+              : <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+                  <div className="tw">
+                    <table>
+                      <thead>
+                        <tr><th>Pet</th><th>Dono</th><th>Serviço</th><th>Porte</th><th>Data</th><th>Renovação</th><th>Freq.</th><th>Valor</th><th>Pgto</th><th>Status</th><th></th></tr>
+                      </thead>
+                      <tbody>
+                        {[...appointments].sort((a, b) => b.date.localeCompare(a.date)).map(a => {
+                          const diff = a.nextDate ? daysDiff(a.nextDate) : null;
+                          return (
+                            <tr key={a.id}>
+                              <td><strong>{getLabel(a)}</strong>{a.isAvulso && <span className="badge spu" style={{ marginLeft: 4 }}>avulso</span>}</td>
+                              <td style={{ color: "#666" }}>{getOwner(a)}</td>
+                              <td><span className="badge sbl">{a.service}</span></td>
+                              <td style={{ color: "#888" }}>{getSize(a)}</td>
+                              <td>{formatDate(a.date)}</td>
+                              <td>{a.nextDate ? <span className={`badge ${diff < 0 ? "srd" : diff <= 7 ? "sor" : "sgr"}`}>{formatDate(a.nextDate)}</span> : "—"}</td>
+                              <td style={{ color: "#888", fontSize: 11 }}>{a.frequencyDays ? `${a.frequencyDays}d` : "28d"}</td>
+                              <td style={{ fontWeight: 700 }}>{formatCurrency(a.price)}</td>
+                              <td><span className={`badge ${a.paymentMethod === "Pix" ? "stl" : a.paymentMethod === "Dinheiro" ? "sgr" : "sor"}`}>{PAYMENT_ICONS[a.paymentMethod]} {a.paymentMethod || "—"}</span></td>
+                              <td><button onClick={() => togglePaid(a.id)} className={`badge ${a.paid ? "sgr" : "srd"}`} style={{ border: "none", cursor: "pointer", padding: "4px 8px" }}>{a.paid ? "✓ Pago" : "Pendente"}</button></td>
+                              <td><div style={{ display: "flex", gap: 4 }}><button className="btn bg1 bsm" onClick={() => openEditAppt(a)}>✏️</button><button className="btn bd" onClick={() => askConfirm("Remover agendamento?", () => deleteAppt(a.id))}>🗑️</button></div></td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+            }
+          </div>
+        )}
+
+        {/* ══════════════════════════════
+            FINANCEIRO
+        ══════════════════════════════ */}
+        {tab === "finance" && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 9 }}>
+              <h2 className="fd" style={{ fontSize: 21 }}>💰 Controle Financeiro</h2>
+              <div style={{ display: "flex", alignItems: "center", gap: 9, flexWrap: "wrap" }}>
+                <label style={{ margin: 0, fontSize: 11 }}>Mês:</label>
+                <input type="month" value={filterMonth} onChange={e => setFilterMonth(e.target.value)} style={{ width: "auto" }} />
+                <button className="btn bg1 bsm" onClick={() => { setEditExp(null); setEf(BLANK_EXP); setModal("expense"); }}>+ Despesa</button>
+              </div>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(145px,1fr))", gap: 11 }}>
+              {[
+                { cls: "sc1", icon: "💰", val: formatCurrency(mRevenue),  label: "Faturamento" },
+                { cls: "sc3", icon: "✅", val: formatCurrency(mReceived), label: "Recebido" },
+                { cls: "sc4", icon: "⏳", val: formatCurrency(mPending),  label: "Pendente" },
+                { cls: "sc5", icon: "📉", val: formatCurrency(mExpTotal), label: "Despesas" },
+                { cls: mProfit >= 0 ? "sc6" : "sc5", icon: mProfit >= 0 ? "🚀" : "⚠️", val: formatCurrency(mProfit), label: "Lucro líquido" },
+              ].map((c, i) => (
+                <div key={i} className={`sc ${c.cls}`}>
+                  <div style={{ fontSize: 22 }}>{c.icon}</div>
+                  <div className="fd" style={{ fontSize: 17, fontWeight: 900, margin: "3px 0 2px" }}>{c.val}</div>
+                  <div style={{ fontSize: 10, opacity: .85, fontFamily: "Lato,sans-serif" }}>{c.label}</div>
+                </div>
+              ))}
+            </div>
+
+            <div className="ftab">
+              {[["receitas","💵 Receitas"],["despesas","📉 Despesas"],["pagamentos","💳 Formas de Pagto"],["resumo","📊 Resumo"]].map(([id, label]) => (
+                <button key={id} className={`ftbtn${finTab === id ? " act" : ""}`} onClick={() => setFinTab(id)}>{label}</button>
+              ))}
+            </div>
+
+            {finTab === "receitas" && (
+              <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+                <div style={{ padding: "14px 18px 0" }}><h3 className="fd" style={{ fontSize: 17, marginBottom: 12 }}>Receitas — {filterMonth}</h3></div>
+                {mAppts.length === 0
+                  ? <p className="fb" style={{ padding: "0 18px 16px", color: "#888", fontSize: 13 }}>Nenhum atendimento neste mês.</p>
+                  : <div className="tw"><table>
+                      <thead><tr><th>Pet</th><th>Serviço</th><th>Porte</th><th>Data</th><th>Valor</th><th>Forma Pgto</th><th>Status</th></tr></thead>
+                      <tbody>
+                        {mAppts.map(a => (
+                          <tr key={a.id}>
+                            <td><strong>{getLabel(a)}</strong>{a.isAvulso && <span className="badge spu" style={{ marginLeft: 4 }}>avulso</span>}</td>
+                            <td>{a.service}</td>
+                            <td>{getSize(a)}</td>
+                            <td>{formatDate(a.date)}</td>
+                            <td style={{ fontWeight: 700 }}>{formatCurrency(a.price)}</td>
+                            <td><span className={`badge ${a.paymentMethod === "Pix" ? "stl" : a.paymentMethod === "Dinheiro" ? "sgr" : "sor"}`}>{PAYMENT_ICONS[a.paymentMethod]} {a.paymentMethod || "—"}</span></td>
+                            <td><button onClick={() => togglePaid(a.id)} className={`badge ${a.paid ? "sgr" : "srd"}`} style={{ border: "none", cursor: "pointer" }}>{a.paid ? "Pago" : "Pendente"}</button></td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table></div>
+                }
+              </div>
+            )}
+
+            {finTab === "despesas" && (
+              <div>
+                <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+                  <div style={{ padding: "14px 18px 0", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <h3 className="fd" style={{ fontSize: 17, marginBottom: 12 }}>Despesas — {filterMonth}</h3>
+                    <button className="btn bp1 bsm" style={{ marginBottom: 12 }} onClick={() => { setEditExp(null); setEf(BLANK_EXP); setModal("expense"); }}>+ Adicionar</button>
+                  </div>
+                  {mExps.length === 0
+                    ? <p className="fb" style={{ padding: "0 18px 16px", color: "#888", fontSize: 13 }}>Nenhuma despesa neste mês.</p>
+                    : <div className="tw"><table>
+                        <thead><tr><th>Descrição</th><th>Categoria</th><th>Data</th><th>Valor</th><th>Obs.</th><th></th></tr></thead>
+                        <tbody>
+                          {mExps.map(e => (
+                            <tr key={e.id}>
+                              <td><strong>{e.description}</strong></td>
+                              <td><span className="badge sor">{e.category}</span></td>
+                              <td>{formatDate(e.date)}</td>
+                              <td style={{ fontWeight: 700, color: "#c0392b" }}>{formatCurrency(e.amount)}</td>
+                              <td style={{ color: "#888", fontSize: 11 }}>{e.notes || "—"}</td>
+                              <td><div style={{ display: "flex", gap: 4 }}><button className="btn bg1 bsm" onClick={() => openEditExp(e)}>✏️</button><button className="btn bd" onClick={() => askConfirm("Remover despesa?", () => deleteExp(e.id))}>🗑️</button></div></td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table></div>
+                  }
+                </div>
+                {mExps.length > 0 && (
+                  <div style={{ marginTop: 10, display: "flex", justifyContent: "flex-end" }}>
+                    <span className="fb" style={{ fontWeight: 700, fontSize: 14, color: "#c0392b" }}>Total: {formatCurrency(mExpTotal)}</span>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {finTab === "pagamentos" && (
+              <div className="g2">
+                <div className="card">
+                  <h3 className="fd" style={{ fontSize: 16, marginBottom: 14 }}>Recebido por forma</h3>
+                  {PAYMENT_METHODS.map(m => {
+                    const val = pmBreak[m] || 0;
+                    const pct = mReceived > 0 ? (val / mReceived) * 100 : 0;
+                    return (
+                      <div key={m} style={{ marginBottom: 13 }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                          <span className="fb" style={{ fontSize: 13 }}>{PAYMENT_ICONS[m]} {m}</span>
+                          <span className="fb" style={{ fontWeight: 700, fontSize: 13 }}>{formatCurrency(val)}</span>
+                        </div>
+                        <div style={{ background: "#f0e0cc", borderRadius: 100, height: 9, overflow: "hidden" }}>
+                          <div style={{ width: `${pct}%`, background: "linear-gradient(90deg,#8b4513,#d4a97a)", height: "100%", borderRadius: 100 }} />
+                        </div>
+                        <div className="fb" style={{ fontSize: 10, color: "#888", marginTop: 2 }}>{pct.toFixed(1)}% do total recebido</div>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="card">
+                  <h3 className="fd" style={{ fontSize: 16, marginBottom: 14 }}>Qtd. transações</h3>
+                  {PAYMENT_METHODS.map(m => {
+                    const qty = mAppts.filter(a => a.paid && a.paymentMethod === m).length;
+                    return (
+                      <div key={m} className="ir">
+                        <span className="fb" style={{ fontSize: 13 }}>{PAYMENT_ICONS[m]} {m}</span>
+                        <span className="fb" style={{ fontWeight: 700 }}>{qty} transação{qty !== 1 ? "ões" : ""}</span>
+                      </div>
+                    );
+                  })}
+                  <div style={{ height: 1, background: "#d4a97a", margin: "10px 0" }} />
+                  <div className="ir">
+                    <span className="fb" style={{ fontSize: 13, fontWeight: 700 }}>Total atendimentos</span>
+                    <span className="fb" style={{ fontWeight: 700 }}>{mAppts.length}</span>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {finTab === "resumo" && (
+              <div className="g2">
+                <div className="card">
+                  <h3 className="fd" style={{ fontSize: 16, marginBottom: 14 }}>Mês: {filterMonth}</h3>
+                  <div className="ir"><span className="fb" style={{ fontSize: 13 }}>Faturamento bruto</span><span className="fb" style={{ fontWeight: 700 }}>{formatCurrency(mRevenue)}</span></div>
+                  <div className="ir"><span className="fb" style={{ fontSize: 13, color: "#2e7d32" }}>Recebido</span><span className="fb" style={{ fontWeight: 700, color: "#2e7d32" }}>{formatCurrency(mReceived)}</span></div>
+                  <div className="ir"><span className="fb" style={{ fontSize: 13, color: "#c0392b" }}>Pendente</span><span className="fb" style={{ fontWeight: 700, color: "#c0392b" }}>{formatCurrency(mPending)}</span></div>
+                  <div className="ir"><span className="fb" style={{ fontSize: 13, color: "#c0392b" }}>Despesas</span><span className="fb" style={{ fontWeight: 700, color: "#c0392b" }}>− {formatCurrency(mExpTotal)}</span></div>
+                  <div style={{ height: 1, background: "#d4a97a", margin: "8px 0" }} />
+                  <div className="ir"><span className="fb" style={{ fontSize: 14, fontWeight: 700 }}>Lucro líquido</span><span className="fb" style={{ fontWeight: 900, fontSize: 17, color: mProfit >= 0 ? "#2e7d32" : "#c0392b" }}>{formatCurrency(mProfit)}</span></div>
+                  {mAppts.length > 0 && <div className="ir"><span className="fb" style={{ fontSize: 13 }}>Ticket médio</span><span className="fb" style={{ fontWeight: 700 }}>{formatCurrency(mRevenue / mAppts.length)}</span></div>}
+                </div>
+                <div className="card">
+                  <h3 className="fd" style={{ fontSize: 16, marginBottom: 14 }}>Acumulado geral</h3>
+                  <div className="ir"><span className="fb" style={{ fontSize: 13 }}>Total faturado</span><span className="fb" style={{ fontWeight: 700 }}>{formatCurrency(allRevenue)}</span></div>
+                  <div className="ir"><span className="fb" style={{ fontSize: 13, color: "#2e7d32" }}>Total recebido</span><span className="fb" style={{ fontWeight: 700, color: "#2e7d32" }}>{formatCurrency(allReceived)}</span></div>
+                  <div className="ir"><span className="fb" style={{ fontSize: 13, color: "#c0392b" }}>Total despesas</span><span className="fb" style={{ fontWeight: 700, color: "#c0392b" }}>{formatCurrency(allExpenses)}</span></div>
+                  <div style={{ height: 1, background: "#d4a97a", margin: "8px 0" }} />
+                  <div className="ir"><span className="fb" style={{ fontSize: 14, fontWeight: 700 }}>Lucro acumulado</span><span className="fb" style={{ fontWeight: 900, fontSize: 17, color: allReceived - allExpenses >= 0 ? "#2e7d32" : "#c0392b" }}>{formatCurrency(allReceived - allExpenses)}</span></div>
+                  <div className="ir"><span className="fb" style={{ fontSize: 13 }}>Total pets</span><span className="fb" style={{ fontWeight: 700 }}>{pets.length}</span></div>
+                  <div className="ir"><span className="fb" style={{ fontSize: 13 }}>Total atendimentos</span><span className="fb" style={{ fontWeight: 700 }}>{appointments.length}</span></div>
+                  {appointments.length > 0 && <div className="ir"><span className="fb" style={{ fontSize: 13 }}>Ticket médio geral</span><span className="fb" style={{ fontWeight: 700 }}>{formatCurrency(allRevenue / appointments.length)}</span></div>}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ══════════════════════════════
+            ALERTAS
+        ══════════════════════════════ */}
+        {tab === "alerts" && (
+          <div>
+            <h2 className="fd" style={{ fontSize: 21, marginBottom: 16 }}>🔔 Alertas de Renovação</h2>
+            {overdue.length > 0 && (
+              <div style={{ marginBottom: 20 }}>
+                <h3 className="fd" style={{ fontSize: 16, color: "#c0392b", marginBottom: 9 }}>⚠️ Atrasados</h3>
+                {overdue.map(a => {
+                  const diff = Math.abs(daysDiff(a.nextDate));
+                  return (
+                    <div key={a.id} className="card al" style={{ padding: "13px 17px", marginBottom: 9 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 7 }}>
+                        <strong className="fd" style={{ fontSize: 15 }}>🐾 {getLabel(a)}</strong>
+                        <span className="badge srd">⚠️ {diff} dia{diff !== 1 ? "s" : ""} de atraso</span>
+                      </div>
+                      <div className="fb" style={{ fontSize: 12, color: "#555", marginTop: 5 }}>
+                        Serviço: <strong>{a.service}</strong> · Frequência: <strong>{a.frequencyDays || 28}d</strong> · Último: {formatDate(a.date)} · Deveria: {formatDate(a.nextDate)}
+                      </div>
+                      <div className="fb" style={{ fontSize: 12, color: "#555", marginTop: 2 }}>
+                        Dono: <strong>{getOwner(a)}</strong>{getPhone(a) ? ` · 📞 ${getPhone(a)}` : ""}
+                      </div>
+                      <button className="btn bp1 bsm" style={{ marginTop: 9 }} onClick={() => reagendarAppt(a)}>+ Reagendar</button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            {renewals.length > 0 && (
+              <div>
+                <h3 className="fd" style={{ fontSize: 16, color: "#e67e22", marginBottom: 9 }}>🔔 Próximas renovações (7 dias)</h3>
+                {renewals.map(a => {
+                  const diff = daysDiff(a.nextDate);
+                  return (
+                    <div key={a.id} className="card alo" style={{ padding: "13px 17px", marginBottom: 9 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 7 }}>
+                        <strong className="fd" style={{ fontSize: 15 }}>🐾 {getLabel(a)}</strong>
+                        <span className="badge sor">{diff === 0 ? "Hoje!" : `em ${diff} dia${diff !== 1 ? "s" : ""}`}</span>
+                      </div>
+                      <div className="fb" style={{ fontSize: 12, color: "#555", marginTop: 5 }}>
+                        Serviço: <strong>{a.service}</strong> · Frequência: <strong>{a.frequencyDays || 28}d</strong> · Renovação: {formatDate(a.nextDate)}
+                      </div>
+                      <div className="fb" style={{ fontSize: 12, color: "#555", marginTop: 2 }}>
+                        Dono: <strong>{getOwner(a)}</strong>{getPhone(a) ? ` · 📞 ${getPhone(a)}` : ""}
+                      </div>
+                      <button className="btn bg1 bsm" style={{ marginTop: 9 }} onClick={() => reagendarAppt(a)}>+ Agendar renovação</button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            {renewals.length === 0 && overdue.length === 0 && (
+              <div className="card" style={{ textAlign: "center", padding: 46 }}>
+                <div style={{ fontSize: 46 }}>🎉</div>
+                <p className="fd" style={{ fontSize: 19, marginTop: 10 }}>Tudo em dia!</p>
+                <p className="fb" style={{ color: "#888", marginTop: 5 }}>Nenhum alerta no momento.</p>
+              </div>
+            )}
+          </div>
+        )}
+      </main>
+
+      {/* ══════════════════════════════════════
+          MODAL — PET
+      ══════════════════════════════════════ */}
+      {modal === "pet" && (
+        <div className="modal-bg" onClick={e => { if (e.target === e.currentTarget) closeModal(); }}>
+          <div className="modal">
+            <h2 className="fd" style={{ fontSize: 19, marginBottom: 16 }}>{editPet ? "✏️ Editar Pet" : "🐾 Cadastrar Pet"}</h2>
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              <div className="g2">
+                <div><label>Nome do pet *</label><input value={pf.name} onChange={e => setPf(f => ({ ...f, name: e.target.value }))} placeholder="Ex: Rex" /></div>
+                <div><label>Raça</label><input value={pf.breed} onChange={e => setPf(f => ({ ...f, breed: e.target.value }))} placeholder="Ex: Poodle" /></div>
+              </div>
+              <div className="g2">
+                <div><label>Porte</label>
+                  <select value={pf.size} onChange={e => setPf(f => ({ ...f, size: e.target.value }))}>
+                    {SIZES.map(s => <option key={s}>{s}</option>)}
+                  </select>
+                </div>
+                <div><label>Dono *</label><input value={pf.owner} onChange={e => setPf(f => ({ ...f, owner: e.target.value }))} placeholder="Nome do responsável" /></div>
+              </div>
+              <div><label>Telefone</label><input value={pf.phone} onChange={e => setPf(f => ({ ...f, phone: e.target.value }))} placeholder="(00) 90000-0000" /></div>
+              <div style={{ borderTop: "1.5px solid #e8d5bc", paddingTop: 12 }}>
+                <p className="fb" style={{ fontSize: 11, fontWeight: 700, color: "#8b4513", marginBottom: 10, letterSpacing: ".06em", textTransform: "uppercase" }}>📍 Endereço</p>
+                <div className="g2" style={{ marginBottom: 10 }}>
+                  <div><label>CEP</label><input value={pf.cep} onChange={e => setPf(f => ({ ...f, cep: e.target.value }))} placeholder="00000-000" /></div>
+                  <div><label>Bairro</label><input value={pf.neighborhood} onChange={e => setPf(f => ({ ...f, neighborhood: e.target.value }))} placeholder="Bairro" /></div>
+                </div>
+                <div className="g2" style={{ marginBottom: 10 }}>
+                  <div><label>Rua / Logradouro</label><input value={pf.street} onChange={e => setPf(f => ({ ...f, street: e.target.value }))} placeholder="Rua das Flores" /></div>
+                  <div><label>Número</label><input value={pf.number} onChange={e => setPf(f => ({ ...f, number: e.target.value }))} placeholder="123" /></div>
+                </div>
+                <div className="g2" style={{ marginBottom: 10 }}>
+                  <div><label>Complemento</label><input value={pf.complement} onChange={e => setPf(f => ({ ...f, complement: e.target.value }))} placeholder="Apto, bloco..." /></div>
+                  <div><label>Cidade</label><input value={pf.city} onChange={e => setPf(f => ({ ...f, city: e.target.value }))} placeholder="São Paulo" /></div>
+                </div>
+                <div><label>Estado</label>
+                  <select value={pf.state} onChange={e => setPf(f => ({ ...f, state: e.target.value }))}>
+                    <option value="">Selecione...</option>
+                    {BR_STATES.map(s => <option key={s}>{s}</option>)}
+                  </select>
+                </div>
+              </div>
+              <div><label>Observações</label><textarea rows={2} value={pf.notes} onChange={e => setPf(f => ({ ...f, notes: e.target.value }))} placeholder="Alergias, comportamento..." /></div>
+              <div style={{ display: "flex", gap: 9, justifyContent: "flex-end" }}>
+                <button className="btn bg1" onClick={closeModal}>Cancelar</button>
+                <button className="btn bp1" onClick={savePet}>{editPet ? "Salvar" : "Cadastrar"}</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ══════════════════════════════════════
+          MODAL — AGENDAMENTO
+      ══════════════════════════════════════ */}
+      {modal === "appt" && (
+        <div className="modal-bg" onClick={e => { if (e.target === e.currentTarget) closeModal(); }}>
+          <div className="modal">
+            <h2 className="fd" style={{ fontSize: 19, marginBottom: 16 }}>{editAppt ? "✏️ Editar Agendamento" : "📅 Novo Agendamento"}</h2>
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              {/* Pet cadastrado / avulso */}
+              <div style={{ background: "#f5e6d3", borderRadius: 10, padding: "10px 12px" }}>
+                <div className="seg">
+                  <button className={`seg-btn${!af.isAvulso ? " act" : ""}`} onClick={() => setAf(f => ({ ...f, isAvulso: false, avulsoName: "", manualPrice: false }))}>📋 Pet Cadastrado</button>
+                  <button className={`seg-btn${af.isAvulso ? " act" : ""}`} onClick={() => setAf(f => ({ ...f, isAvulso: true, petId: "", manualPrice: false }))}>🐕 Pet Avulso</button>
+                </div>
+              </div>
+
+              {!af.isAvulso ? (
+                <div><label>Pet *</label>
+                  <select value={af.petId} onChange={e => setAf(f => ({ ...f, petId: e.target.value }))}>
+                    <option value="">Selecione o pet...</option>
+                    {pets.map(p => <option key={p.id} value={p.id}>{p.name} — {p.owner} ({p.size})</option>)}
+                  </select>
+                </div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                  <div className="g2">
+                    <div><label>Nome do pet *</label><input value={af.avulsoName} onChange={e => setAf(f => ({ ...f, avulsoName: e.target.value }))} placeholder="Ex: Bolinha" /></div>
+                    <div><label>Porte</label>
+                      <select value={af.avulsoSize} onChange={e => setAf(f => ({ ...f, avulsoSize: e.target.value }))}>
+                        {SIZES.map(s => <option key={s}>{s}</option>)}
+                      </select>
+                    </div>
+                  </div>
+                  <div className="g2">
+                    <div><label>Dono</label><input value={af.avulsoOwner} onChange={e => setAf(f => ({ ...f, avulsoOwner: e.target.value }))} placeholder="Nome" /></div>
+                    <div><label>Telefone</label><input value={af.avulsoPhone} onChange={e => setAf(f => ({ ...f, avulsoPhone: e.target.value }))} placeholder="(00) 90000-0000" /></div>
+                  </div>
+                </div>
+              )}
+
+              <div className="g2">
+                <div><label>Serviço</label>
+                  <select value={af.service} onChange={e => setAf(f => ({ ...f, service: e.target.value, manualPrice: false }))}>
+                    {SERVICES.map(s => <option key={s}>{s}</option>)}
+                  </select>
+                </div>
+                <div><label>Data *</label><input type="date" value={af.date} onChange={e => setAf(f => ({ ...f, date: e.target.value }))} /></div>
+              </div>
+
+              {/* FIX: Frequência de renovação */}
+              <div>
+                <label>Frequência de renovação</label>
+                <select value={af.frequencyDays} onChange={e => setAf(f => ({ ...f, frequencyDays: parseInt(e.target.value) }))}>
+                  {FREQUENCIES.map(fr => <option key={fr.days} value={fr.days}>{fr.label}</option>)}
+                </select>
+              </div>
+
+              <div className="g2">
+                <div>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                    <label style={{ margin: 0 }}>Valor (R$)</label>
+                    <div style={{ display: "flex", alignItems: "center", gap: 5, cursor: "pointer" }} onClick={() => setAf(f => ({ ...f, manualPrice: !f.manualPrice }))}>
+                      <span className="fb" style={{ fontSize: 10, color: "#8b4513" }}>Manual</span>
+                      <div className="tgl" style={{ background: af.manualPrice ? "#8b4513" : "#d4a97a" }}>
+                        <div className="tgl-th" style={{ transform: af.manualPrice ? "translateX(20px)" : "translateX(0)" }} />
+                      </div>
+                    </div>
+                  </div>
+                  <input type="number" step="0.01" value={af.price}
+                    onChange={e => setAf(f => ({ ...f, price: e.target.value, manualPrice: true }))}
+                    placeholder={af.manualPrice ? "Digite o valor" : "Automático"} />
+                </div>
+                <div><label>Forma de pagamento</label>
+                  <select value={af.paymentMethod} onChange={e => setAf(f => ({ ...f, paymentMethod: e.target.value }))}>
+                    {PAYMENT_METHODS.map(m => <option key={m}>{m}</option>)}
+                  </select>
+                </div>
+              </div>
+
+              <button type="button" onClick={() => setAf(f => ({ ...f, paid: !f.paid }))}
+                className={`badge ${af.paid ? "sgr" : "srd"}`}
+                style={{ border: "none", cursor: "pointer", padding: "11px 18px", fontSize: 13, borderRadius: 9, fontWeight: 700, width: "100%" }}>
+                {af.paid ? "✅ Pago" : "⏳ Pendente — clique para marcar como pago"}
+              </button>
+
+              {af.date && (
+                <div style={{ background: "#f5e6d3", borderRadius: 9, padding: "9px 13px" }}>
+                  <span className="fb" style={{ fontSize: 12, color: "#8b4513" }}>
+                    🔔 Próximo lembrete: <strong>{formatDate(addDays(af.date, parseInt(af.frequencyDays) || 28))}</strong> ({af.frequencyDays || 28} dias)
+                  </span>
+                </div>
+              )}
+
+              <div><label>Observações</label><textarea rows={2} value={af.notes} onChange={e => setAf(f => ({ ...f, notes: e.target.value }))} placeholder="Notas do atendimento..." /></div>
+              <div style={{ display: "flex", gap: 9, justifyContent: "flex-end" }}>
+                <button className="btn bg1" onClick={closeModal}>Cancelar</button>
+                <button className="btn bp1" onClick={saveAppt}>{editAppt ? "Salvar" : "Agendar"}</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ══════════════════════════════════════
+          MODAL — DESPESA
+      ══════════════════════════════════════ */}
+      {modal === "expense" && (
+        <div className="modal-bg" onClick={e => { if (e.target === e.currentTarget) closeModal(); }}>
+          <div className="modal">
+            <h2 className="fd" style={{ fontSize: 19, marginBottom: 16 }}>{editExp ? "✏️ Editar Despesa" : "📉 Nova Despesa"}</h2>
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              <div><label>Descrição *</label><input value={ef.description} onChange={e => setEf(f => ({ ...f, description: e.target.value }))} placeholder="Ex: Shampoo profissional" /></div>
+              <div className="g2">
+                <div><label>Categoria</label>
+                  <select value={ef.category} onChange={e => setEf(f => ({ ...f, category: e.target.value }))}>
+                    {EXPENSE_CATEGORIES.map(c => <option key={c}>{c}</option>)}
+                  </select>
+                </div>
+                <div><label>Data *</label><input type="date" value={ef.date} onChange={e => setEf(f => ({ ...f, date: e.target.value }))} /></div>
+              </div>
+              <div><label>Valor (R$) *</label><input type="number" step="0.01" value={ef.amount} onChange={e => setEf(f => ({ ...f, amount: e.target.value }))} placeholder="0,00" /></div>
+              <div><label>Observações</label><textarea rows={2} value={ef.notes} onChange={e => setEf(f => ({ ...f, notes: e.target.value }))} placeholder="Detalhes adicionais..." /></div>
+              <div style={{ display: "flex", gap: 9, justifyContent: "flex-end" }}>
+                <button className="btn bg1" onClick={closeModal}>Cancelar</button>
+                <button className="btn bp1" onClick={saveExp}>{editExp ? "Salvar" : "Adicionar"}</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ══════════════════════════════════════
+          MODAL — CONFIRMAÇÃO DE EXCLUSÃO
+      ══════════════════════════════════════ */}
+      {confirmDlg && (
+        <div className="modal-bg" onClick={() => setConfirmDlg(null)}>
+          <div className="modal" style={{ maxWidth: 340, textAlign: "center" }} onClick={e => e.stopPropagation()}>
+            <div style={{ fontSize: 40, marginBottom: 12 }}>⚠️</div>
+            <p className="fd" style={{ fontSize: 17, marginBottom: 8 }}>Confirmar exclusão</p>
+            <p className="fb" style={{ fontSize: 14, color: "#555", marginBottom: 22 }}>{confirmDlg.msg}</p>
+            <div style={{ display: "flex", gap: 10, justifyContent: "center" }}>
+              <button className="btn bg1" onClick={() => setConfirmDlg(null)}>Cancelar</button>
+              <button className="btn bd" style={{ padding: "9px 22px", fontSize: 13 }} onClick={() => { confirmDlg.onOk(); setConfirmDlg(null); }}>Excluir</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>
